@@ -3,314 +3,311 @@ require('dotenv').config();
 const express = require('express');
 const crypto = require('crypto');
 const axios = require('axios');
-const mongoose = require('mongoose');
+const { MongoClient, ObjectId } = require('mongodb');
 
 const app = express();
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => console.log('✅ MongoDB Connected'))
-.catch(err => console.error('❌ MongoDB Connection Error:', err));
-
 // ============================================
-// MONGODB SCHEMAS
+// MONGODB CONNECTION
 // ============================================
 
-// Component Sale Schema - Track ALL individual component sales
-const componentSaleSchema = new mongoose.Schema({
-  // Component Information (MAIN FOCUS)
-  componentSku: {
-    type: String,
-    required: true,
-    index: true
-  },
-  componentProductName: {
-    type: String,
-    required: true,
-    index: true
-  },
-  quantitySold: {
-    type: Number,
-    required: true
-  },
-  
-  // Product Details
-  weight: {
-    type: String,
-    index: true
-  },
-  
-  // Financial Data
-  unitPrice: {
-    type: Number,
-    required: true
-  },
-  unitCost: {
-    type: Number,
-    required: true
-  },
-  totalPrice: {
-    type: Number,
-    required: true
-  },
-  totalCost: {
-    type: Number,
-    required: true
-  },
-  profit: {
-    type: Number,
-    required: true
-  },
-  
-  // Sale Type
-  saleType: {
-    type: String,
-    enum: ['direct', 'bundle'],
-    required: true,
-    index: true,
-    default: 'direct'
-  },
-  
-  // Bundle Information (only if saleType is 'bundle')
-  bundleSku: {
-    type: String,
-    index: true
-  },
-  bundleProductName: String,
-  
-  // Order Information
-  orderId: {
-    type: String,
-    required: true,
-    index: true
-  },
-  orderName: String,
-  orderDate: {
-    type: Date,
-    required: true,
-    index: true
-  },
-  
-  // Action tracking
-  action: {
-    type: String,
-    enum: ['sale', 'refund', 'cancellation'],
-    required: true,
-    default: 'sale',
-    index: true
-  },
-  
-  // Inventory tracking
-  inventoryBefore: Number,
-  inventoryAfter: Number,
-  
-  // Metadata
-  processedAt: {
-    type: Date,
-    default: Date.now,
-    index: true
+const MONGODB_URI = process.env.MONGODB_URI;
+const DB_NAME = process.env.MONGODB_DB || 'shopify-bundles';
+
+let mongoClient = null;
+let db = null;
+
+async function connectDB() {
+  if (!mongoClient) {
+    mongoClient = new MongoClient(MONGODB_URI);
+    await mongoClient.connect();
+    console.log('✅ Connected to MongoDB');
+    db = mongoClient.db(DB_NAME);
+    
+    // Create indexes
+    await createIndexes();
   }
-}, {
-  timestamps: true
+  return db;
+}
+
+async function createIndexes() {
+  try {
+    const db = await connectDB();
+    
+    // Component Sales Indexes
+    const componentSales = db.collection('componentSales');
+    await componentSales.createIndex({ componentSku: 1, orderDate: -1 });
+    await componentSales.createIndex({ orderDate: -1, action: 1 });
+    await componentSales.createIndex({ componentSku: 1, action: 1, orderDate: -1 });
+    await componentSales.createIndex({ saleType: 1, orderDate: -1 });
+    await componentSales.createIndex({ orderId: 1 });
+    await componentSales.createIndex({ processedAt: -1 });
+    
+    // Bundle Sales Indexes
+    const bundleSales = db.collection('bundleSales');
+    await bundleSales.createIndex({ bundleSku: 1, orderDate: -1 });
+    await bundleSales.createIndex({ orderDate: -1, action: 1 });
+    await bundleSales.createIndex({ orderId: 1 });
+    
+    // Daily Component Summary Indexes
+    const dailyComponentSummary = db.collection('dailyComponentSummary');
+    await dailyComponentSummary.createIndex({ date: 1, componentSku: 1 }, { unique: true });
+    await dailyComponentSummary.createIndex({ date: -1 });
+    
+    // Daily Bundle Summary Indexes
+    const dailyBundleSummary = db.collection('dailyBundleSummary');
+    await dailyBundleSummary.createIndex({ date: 1, bundleSku: 1 }, { unique: true });
+    await dailyBundleSummary.createIndex({ date: -1 });
+    
+    console.log('✅ MongoDB indexes created');
+  } catch (error) {
+    console.error('❌ Error creating indexes:', error.message);
+  }
+}
+
+// Initialize DB connection on startup
+connectDB().catch(err => {
+  console.error('❌ Failed to connect to MongoDB:', err);
+  process.exit(1);
 });
 
-componentSaleSchema.index({ componentSku: 1, orderDate: -1 });
-componentSaleSchema.index({ orderDate: -1, action: 1 });
-componentSaleSchema.index({ componentSku: 1, action: 1, orderDate: -1 });
-componentSaleSchema.index({ saleType: 1, orderDate: -1 });
+// ============================================
+// MONGODB HELPER FUNCTIONS
+// ============================================
 
-const ComponentSale = mongoose.model('ComponentSale', componentSaleSchema);
-
-// NEW: Bundle Sale Schema - Track bundle sales separately
-const bundleSaleSchema = new mongoose.Schema({
-  // Bundle Information
-  bundleSku: {
-    type: String,
-    required: true,
-    index: true
-  },
-  bundleProductName: {
-    type: String,
-    required: true,
-    index: true
-  },
-  quantitySold: {
-    type: Number,
-    required: true
-  },
-  
-  // Financial Data (of the actual bundle product price)
-  unitPrice: {
-    type: Number,
-    required: true
-  },
-  totalPrice: {
-    type: Number,
-    required: true
-  },
-  
-  // Components included in this bundle
-  components: [{
-    sku: String,
-    name: String,
-    quantity: Number
-  }],
-  
-  // Order Information
-  orderId: {
-    type: String,
-    required: true,
-    index: true
-  },
-  orderName: String,
-  orderDate: {
-    type: Date,
-    required: true,
-    index: true
-  },
-  
-  // Action tracking
-  action: {
-    type: String,
-    enum: ['sale', 'refund', 'cancellation'],
-    required: true,
-    default: 'sale',
-    index: true
-  },
-  
-  // Metadata
-  processedAt: {
-    type: Date,
-    default: Date.now,
-    index: true
+// Save component sale
+async function saveComponentSale(saleData) {
+  try {
+    const db = await connectDB();
+    const collection = db.collection('componentSales');
+    
+    const result = await collection.insertOne({
+      ...saleData,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+    
+    const saleTypeIcon = saleData.saleType === 'direct' ? '🛒' : '📦';
+    console.log(`💾 ${saleTypeIcon} Component: ${saleData.componentSku} (${saleData.quantitySold}x) - $${saleData.totalPrice.toFixed(2)} [${saleData.saleType}]`);
+    
+    return result;
+  } catch (error) {
+    console.error('❌ Error saving component sale:', error.message);
+    throw error;
   }
-}, {
-  timestamps: true
-});
+}
 
-bundleSaleSchema.index({ bundleSku: 1, orderDate: -1 });
-bundleSaleSchema.index({ orderDate: -1, action: 1 });
-
-const BundleSale = mongoose.model('BundleSale', bundleSaleSchema);
-
-// Daily Component Summary
-const dailyComponentSummarySchema = new mongoose.Schema({
-  date: {
-    type: Date,
-    required: true,
-    index: true
-  },
-  componentSku: {
-    type: String,
-    required: true,
-    index: true
-  },
-  componentProductName: String,
-  weight: String,
-  
-  totalSold: {
-    type: Number,
-    default: 0
-  },
-  totalRefunded: {
-    type: Number,
-    default: 0
-  },
-  netSold: {
-    type: Number,
-    default: 0
-  },
-  
-  directSales: {
-    type: Number,
-    default: 0
-  },
-  bundleSales: {
-    type: Number,
-    default: 0
-  },
-  
-  totalRevenue: {
-    type: Number,
-    default: 0
-  },
-  totalCost: {
-    type: Number,
-    default: 0
-  },
-  totalProfit: {
-    type: Number,
-    default: 0
-  },
-  
-  orderCount: {
-    type: Number,
-    default: 0
-  },
-  
-  lastUpdated: {
-    type: Date,
-    default: Date.now
+// Save bundle sale
+async function saveBundleSale(saleData) {
+  try {
+    const db = await connectDB();
+    const collection = db.collection('bundleSales');
+    
+    const result = await collection.insertOne({
+      ...saleData,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+    
+    console.log(`💾 📦 Bundle: ${saleData.bundleSku} (${saleData.quantitySold}x) - $${saleData.totalPrice.toFixed(2)}`);
+    
+    return result;
+  } catch (error) {
+    console.error('❌ Error saving bundle sale:', error.message);
+    throw error;
   }
-}, {
-  timestamps: true
-});
+}
 
-dailyComponentSummarySchema.index({ date: 1, componentSku: 1 }, { unique: true });
+// Update daily component summary
+async function updateDailyComponentSummary(componentSku, date) {
+  try {
+    const db = await connectDB();
+    const componentSales = db.collection('componentSales');
+    const dailySummary = db.collection('dailyComponentSummary');
+    
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    // Aggregate sales for this component on this day
+    const aggregation = await componentSales.aggregate([
+      {
+        $match: {
+          componentSku: componentSku,
+          orderDate: { $gte: startOfDay, $lte: endOfDay }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          productName: { $first: '$componentProductName' },
+          weight: { $first: '$weight' },
+          totalSold: {
+            $sum: {
+              $cond: [{ $eq: ['$action', 'sale'] }, '$quantitySold', 0]
+            }
+          },
+          totalRefunded: {
+            $sum: {
+              $cond: [{ $in: ['$action', ['refund', 'cancellation']] }, '$quantitySold', 0]
+            }
+          },
+          directSales: {
+            $sum: {
+              $cond: [
+                { $and: [
+                  { $eq: ['$action', 'sale'] },
+                  { $eq: ['$saleType', 'direct'] }
+                ]},
+                '$quantitySold',
+                0
+              ]
+            }
+          },
+          bundleSales: {
+            $sum: {
+              $cond: [
+                { $and: [
+                  { $eq: ['$action', 'sale'] },
+                  { $eq: ['$saleType', 'bundle'] }
+                ]},
+                '$quantitySold',
+                0
+              ]
+            }
+          },
+          totalRevenue: {
+            $sum: {
+              $cond: [{ $eq: ['$action', 'sale'] }, '$totalPrice', 0]
+            }
+          },
+          totalCost: {
+            $sum: {
+              $cond: [{ $eq: ['$action', 'sale'] }, '$totalCost', 0]
+            }
+          },
+          orderCount: { $sum: 1 }
+        }
+      }
+    ]).toArray();
 
-const DailyComponentSummary = mongoose.model('DailyComponentSummary', dailyComponentSummarySchema);
+    if (aggregation.length > 0) {
+      const stats = aggregation[0];
+      const netSold = stats.totalSold - stats.totalRefunded;
+      const totalProfit = stats.totalRevenue - stats.totalCost;
 
-// NEW: Daily Bundle Summary
-const dailyBundleSummarySchema = new mongoose.Schema({
-  date: {
-    type: Date,
-    required: true,
-    index: true
-  },
-  bundleSku: {
-    type: String,
-    required: true,
-    index: true
-  },
-  bundleProductName: String,
-  
-  totalSold: {
-    type: Number,
-    default: 0
-  },
-  totalRefunded: {
-    type: Number,
-    default: 0
-  },
-  netSold: {
-    type: Number,
-    default: 0
-  },
-  
-  totalRevenue: {
-    type: Number,
-    default: 0
-  },
-  
-  orderCount: {
-    type: Number,
-    default: 0
-  },
-  
-  lastUpdated: {
-    type: Date,
-    default: Date.now
+      await dailySummary.updateOne(
+        { 
+          date: startOfDay,
+          componentSku: componentSku
+        },
+        {
+          $set: {
+            componentProductName: stats.productName,
+            weight: stats.weight,
+            totalSold: stats.totalSold,
+            totalRefunded: stats.totalRefunded,
+            netSold: netSold,
+            directSales: stats.directSales,
+            bundleSales: stats.bundleSales,
+            totalRevenue: stats.totalRevenue,
+            totalCost: stats.totalCost,
+            totalProfit: totalProfit,
+            orderCount: stats.orderCount,
+            lastUpdated: new Date(),
+            updatedAt: new Date()
+          },
+          $setOnInsert: {
+            createdAt: new Date()
+          }
+        },
+        { upsert: true }
+      );
+    }
+  } catch (error) {
+    console.error('❌ Error updating daily component summary:', error.message);
   }
-}, {
-  timestamps: true
-});
+}
 
-dailyBundleSummarySchema.index({ date: 1, bundleSku: 1 }, { unique: true });
+// Update daily bundle summary
+async function updateDailyBundleSummary(bundleSku, date) {
+  try {
+    const db = await connectDB();
+    const bundleSales = db.collection('bundleSales');
+    const dailySummary = db.collection('dailyBundleSummary');
+    
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    const aggregation = await bundleSales.aggregate([
+      {
+        $match: {
+          bundleSku: bundleSku,
+          orderDate: { $gte: startOfDay, $lte: endOfDay }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          productName: { $first: '$bundleProductName' },
+          totalSold: {
+            $sum: {
+              $cond: [{ $eq: ['$action', 'sale'] }, '$quantitySold', 0]
+            }
+          },
+          totalRefunded: {
+            $sum: {
+              $cond: [{ $in: ['$action', ['refund', 'cancellation']] }, '$quantitySold', 0]
+            }
+          },
+          totalRevenue: {
+            $sum: {
+              $cond: [{ $eq: ['$action', 'sale'] }, '$totalPrice', 0]
+            }
+          },
+          orderCount: { $sum: 1 }
+        }
+      }
+    ]).toArray();
 
-const DailyBundleSummary = mongoose.model('DailyBundleSummary', dailyBundleSummarySchema);
+    if (aggregation.length > 0) {
+      const stats = aggregation[0];
+      const netSold = stats.totalSold - stats.totalRefunded;
+
+      await dailySummary.updateOne(
+        { 
+          date: startOfDay,
+          bundleSku: bundleSku
+        },
+        {
+          $set: {
+            bundleProductName: stats.productName,
+            totalSold: stats.totalSold,
+            totalRefunded: stats.totalRefunded,
+            netSold: netSold,
+            totalRevenue: stats.totalRevenue,
+            orderCount: stats.orderCount,
+            lastUpdated: new Date(),
+            updatedAt: new Date()
+          },
+          $setOnInsert: {
+            createdAt: new Date()
+          }
+        },
+        { upsert: true }
+      );
+
+      console.log(`📊 Updated bundle daily summary: ${bundleSku} - ${netSold} units, $${stats.totalRevenue.toFixed(2)} revenue`);
+    }
+  } catch (error) {
+    console.error('❌ Error updating daily bundle summary:', error.message);
+  }
+}
 
 // ============================================
 // PRODUCT PRICING & COST CONFIGURATION
@@ -457,209 +454,6 @@ function getBundlePricing(sku) {
 
 function isTrackableIndividual(sku) {
   return COMPONENT_PRICING.hasOwnProperty(sku);
-}
-
-// ============================================
-// MONGODB HELPER FUNCTIONS
-// ============================================
-
-// Save component sale
-async function saveComponentSale(saleData) {
-  try {
-    const sale = new ComponentSale(saleData);
-    await sale.save();
-    
-    const saleTypeIcon = saleData.saleType === 'direct' ? '🛒' : '📦';
-    console.log(`💾 ${saleTypeIcon} Component: ${saleData.componentSku} (${saleData.quantitySold}x) - $${saleData.totalPrice.toFixed(2)} [${saleData.saleType}]`);
-    return sale;
-  } catch (error) {
-    console.error('❌ Error saving component sale:', error.message);
-    throw error;
-  }
-}
-
-// NEW: Save bundle sale
-async function saveBundleSale(saleData) {
-  try {
-    const sale = new BundleSale(saleData);
-    await sale.save();
-    
-    console.log(`💾 📦 Bundle: ${saleData.bundleSku} (${saleData.quantitySold}x) - $${saleData.totalPrice.toFixed(2)}`);
-    return sale;
-  } catch (error) {
-    console.error('❌ Error saving bundle sale:', error.message);
-    throw error;
-  }
-}
-
-// Update daily component summary
-async function updateDailyComponentSummary(componentSku, date) {
-  try {
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
-    
-    const aggregation = await ComponentSale.aggregate([
-      {
-        $match: {
-          componentSku: componentSku,
-          orderDate: { $gte: startOfDay, $lte: endOfDay }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          productName: { $first: '$componentProductName' },
-          weight: { $first: '$weight' },
-          totalSold: {
-            $sum: {
-              $cond: [{ $eq: ['$action', 'sale'] }, '$quantitySold', 0]
-            }
-          },
-          totalRefunded: {
-            $sum: {
-              $cond: [{ $in: ['$action', ['refund', 'cancellation']] }, '$quantitySold', 0]
-            }
-          },
-          directSales: {
-            $sum: {
-              $cond: [
-                { $and: [
-                  { $eq: ['$action', 'sale'] },
-                  { $eq: ['$saleType', 'direct'] }
-                ]},
-                '$quantitySold',
-                0
-              ]
-            }
-          },
-          bundleSales: {
-            $sum: {
-              $cond: [
-                { $and: [
-                  { $eq: ['$action', 'sale'] },
-                  { $eq: ['$saleType', 'bundle'] }
-                ]},
-                '$quantitySold',
-                0
-              ]
-            }
-          },
-          totalRevenue: {
-            $sum: {
-              $cond: [{ $eq: ['$action', 'sale'] }, '$totalPrice', 0]
-            }
-          },
-          totalCost: {
-            $sum: {
-              $cond: [{ $eq: ['$action', 'sale'] }, '$totalCost', 0]
-            }
-          },
-          orderCount: { $sum: 1 }
-        }
-      }
-    ]);
-
-    if (aggregation.length > 0) {
-      const stats = aggregation[0];
-      const netSold = stats.totalSold - stats.totalRefunded;
-      const totalProfit = stats.totalRevenue - stats.totalCost;
-
-      await DailyComponentSummary.findOneAndUpdate(
-        { 
-          date: startOfDay,
-          componentSku: componentSku
-        },
-        {
-          componentProductName: stats.productName,
-          weight: stats.weight,
-          totalSold: stats.totalSold,
-          totalRefunded: stats.totalRefunded,
-          netSold: netSold,
-          directSales: stats.directSales,
-          bundleSales: stats.bundleSales,
-          totalRevenue: stats.totalRevenue,
-          totalCost: stats.totalCost,
-          totalProfit: totalProfit,
-          orderCount: stats.orderCount,
-          lastUpdated: new Date()
-        },
-        { upsert: true, new: true }
-      );
-    }
-  } catch (error) {
-    console.error('❌ Error updating daily component summary:', error.message);
-  }
-}
-
-// NEW: Update daily bundle summary
-async function updateDailyBundleSummary(bundleSku, date) {
-  try {
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
-    
-    const aggregation = await BundleSale.aggregate([
-      {
-        $match: {
-          bundleSku: bundleSku,
-          orderDate: { $gte: startOfDay, $lte: endOfDay }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          productName: { $first: '$bundleProductName' },
-          totalSold: {
-            $sum: {
-              $cond: [{ $eq: ['$action', 'sale'] }, '$quantitySold', 0]
-            }
-          },
-          totalRefunded: {
-            $sum: {
-              $cond: [{ $in: ['$action', ['refund', 'cancellation']] }, '$quantitySold', 0]
-            }
-          },
-          totalRevenue: {
-            $sum: {
-              $cond: [{ $eq: ['$action', 'sale'] }, '$totalPrice', 0]
-            }
-          },
-          orderCount: { $sum: 1 }
-        }
-      }
-    ]);
-
-    if (aggregation.length > 0) {
-      const stats = aggregation[0];
-      const netSold = stats.totalSold - stats.totalRefunded;
-
-      await DailyBundleSummary.findOneAndUpdate(
-        { 
-          date: startOfDay,
-          bundleSku: bundleSku
-        },
-        {
-          bundleProductName: stats.productName,
-          totalSold: stats.totalSold,
-          totalRefunded: stats.totalRefunded,
-          netSold: netSold,
-          totalRevenue: stats.totalRevenue,
-          orderCount: stats.orderCount,
-          lastUpdated: new Date()
-        },
-        { upsert: true, new: true }
-      );
-
-      console.log(`📊 Updated bundle daily summary: ${bundleSku} - ${netSold} units, $${stats.totalRevenue.toFixed(2)} revenue`);
-    }
-  } catch (error) {
-    console.error('❌ Error updating daily bundle summary:', error.message);
-  }
 }
 
 // ============================================
@@ -997,7 +791,8 @@ async function saveDirectIndividualSale(item, orderData, action = 'sale') {
       orderDate: orderData.created_at ? new Date(orderData.created_at) : new Date(),
       action: action,
       inventoryBefore: null,
-      inventoryAfter: variant?.inventoryQuantity || null
+      inventoryAfter: variant?.inventoryQuantity || null,
+      processedAt: new Date()
     };
 
     await saveComponentSale(saleData);
@@ -1010,7 +805,6 @@ async function saveDirectIndividualSale(item, orderData, action = 'sale') {
   }
 }
 
-// Process line items - UPDATED to track bundles AND components
 async function processLineItems(lineItems, action = 'reduce', orderData = {}) {
   const results = [];
   
@@ -1023,17 +817,14 @@ async function processLineItems(lineItems, action = 'reduce', orderData = {}) {
       continue;
     }
 
-    // Check if this is a BUNDLE
     if (BUNDLE_CONFIG[sku]) {
       console.log(`\n📦 Processing bundle: ${sku} (${quantity}x)`);
       
       const bundleVariant = await getVariantBySKU(sku);
       const bundleProductName = bundleVariant?.displayName || item.title || sku;
       
-      // Get bundle pricing
       const bundlePricing = getBundlePricing(sku);
       
-      // NEW: Save bundle sale
       try {
         const bundleSaleData = {
           bundleSku: sku,
@@ -1052,7 +843,8 @@ async function processLineItems(lineItems, action = 'reduce', orderData = {}) {
           orderId: orderData.id?.toString() || 'unknown',
           orderName: orderData.name || orderData.order_number || 'N/A',
           orderDate: orderData.created_at ? new Date(orderData.created_at) : new Date(),
-          action: action === 'reduce' ? 'sale' : action === 'restore' ? 'cancellation' : action
+          action: action === 'reduce' ? 'sale' : action === 'restore' ? 'cancellation' : action,
+          processedAt: new Date()
         };
 
         await saveBundleSale(bundleSaleData);
@@ -1062,7 +854,6 @@ async function processLineItems(lineItems, action = 'reduce', orderData = {}) {
         console.error('❌ Failed to save bundle to MongoDB:', dbError.message);
       }
       
-      // Process component inventory and tracking
       const components = BUNDLE_CONFIG[sku];
       
       for (const component of components) {
@@ -1104,7 +895,8 @@ async function processLineItems(lineItems, action = 'reduce', orderData = {}) {
             orderDate: orderData.created_at ? new Date(orderData.created_at) : new Date(),
             action: action === 'reduce' ? 'sale' : action === 'restore' ? 'cancellation' : action,
             inventoryBefore: result.oldQuantity,
-            inventoryAfter: result.newQuantity
+            inventoryAfter: result.newQuantity,
+            processedAt: new Date()
           };
 
           await saveComponentSale(saleData);
@@ -1232,6 +1024,9 @@ app.post('/webhooks/orders/edited', verifyWebhook, async (req, res) => {
 // Component sales summary
 app.get('/api/component-sales/summary', async (req, res) => {
   try {
+    const db = await connectDB();
+    const componentSales = db.collection('componentSales');
+    
     const { 
       days = 7,
       startDate,
@@ -1264,7 +1059,7 @@ app.get('/api/component-sales/summary', async (req, res) => {
       matchQuery.saleType = saleType;
     }
 
-    const summary = await ComponentSale.aggregate([
+    const summary = await componentSales.aggregate([
       { $match: matchQuery },
       {
         $group: {
@@ -1314,7 +1109,7 @@ app.get('/api/component-sales/summary', async (req, res) => {
         }
       },
       { $sort: { quantitySold: -1 } }
-    ]);
+    ]).toArray();
 
     const grandTotals = summary.reduce((acc, item) => {
       acc.totalUnits += item.quantitySold;
@@ -1355,9 +1150,12 @@ app.get('/api/component-sales/summary', async (req, res) => {
   }
 });
 
-// NEW: Bundle sales summary
+// Bundle sales summary
 app.get('/api/bundle-sales/summary', async (req, res) => {
   try {
+    const db = await connectDB();
+    const bundleSales = db.collection('bundleSales');
+    
     const { 
       days = 7,
       startDate,
@@ -1380,7 +1178,7 @@ app.get('/api/bundle-sales/summary', async (req, res) => {
       };
     }
 
-    const summary = await BundleSale.aggregate([
+    const summary = await bundleSales.aggregate([
       { 
         $match: { 
           ...dateQuery,
@@ -1411,7 +1209,7 @@ app.get('/api/bundle-sales/summary', async (req, res) => {
         }
       },
       { $sort: { quantitySold: -1 } }
-    ]);
+    ]).toArray();
 
     const grandTotals = summary.reduce((acc, item) => {
       acc.totalBundles += item.quantitySold;
@@ -1441,24 +1239,27 @@ app.get('/api/bundle-sales/summary', async (req, res) => {
   }
 });
 
-// Get detailed sales for a specific component
+// Get specific component details
 app.get('/api/component-sales/:sku', async (req, res) => {
   try {
+    const db = await connectDB();
+    const componentSales = db.collection('componentSales');
+    
     const { sku } = req.params;
     const { days = 7 } = req.query;
 
     const daysAgo = new Date();
     daysAgo.setDate(daysAgo.getDate() - parseInt(days));
 
-    const sales = await ComponentSale.find({
+    const sales = await componentSales.find({
       componentSku: sku,
       orderDate: { $gte: daysAgo }
     })
-    .select('-__v')
     .sort({ orderDate: -1 })
-    .limit(100);
+    .limit(100)
+    .toArray();
 
-    const summary = await ComponentSale.aggregate([
+    const summary = await componentSales.aggregate([
       {
         $match: {
           componentSku: sku,
@@ -1512,7 +1313,7 @@ app.get('/api/component-sales/:sku', async (req, res) => {
           orderCount: { $addToSet: '$orderId' }
         }
       }
-    ]);
+    ]).toArray();
 
     const stats = summary[0] || { 
       totalSold: 0, 
@@ -1558,24 +1359,27 @@ app.get('/api/component-sales/:sku', async (req, res) => {
   }
 });
 
-// NEW: Get detailed sales for a specific bundle
+// Get specific bundle details
 app.get('/api/bundle-sales/:sku', async (req, res) => {
   try {
+    const db = await connectDB();
+    const bundleSales = db.collection('bundleSales');
+    
     const { sku } = req.params;
     const { days = 7 } = req.query;
 
     const daysAgo = new Date();
     daysAgo.setDate(daysAgo.getDate() - parseInt(days));
 
-    const sales = await BundleSale.find({
+    const sales = await bundleSales.find({
       bundleSku: sku,
       orderDate: { $gte: daysAgo }
     })
-    .select('-__v')
     .sort({ orderDate: -1 })
-    .limit(100);
+    .limit(100)
+    .toArray();
 
-    const summary = await BundleSale.aggregate([
+    const summary = await bundleSales.aggregate([
       {
         $match: {
           bundleSku: sku,
@@ -1606,7 +1410,7 @@ app.get('/api/bundle-sales/:sku', async (req, res) => {
           orderCount: { $addToSet: '$orderId' }
         }
       }
-    ]);
+    ]).toArray();
 
     const stats = summary[0] || { 
       totalSold: 0, 
@@ -1639,9 +1443,12 @@ app.get('/api/bundle-sales/:sku', async (req, res) => {
   }
 });
 
-// Daily breakdown for components
+// Daily component breakdown
 app.get('/api/component-sales/daily', async (req, res) => {
   try {
+    const db = await connectDB();
+    const dailySummary = db.collection('dailyComponentSummary');
+    
     const { days = 7, sku } = req.query;
 
     const daysAgo = new Date();
@@ -1653,9 +1460,10 @@ app.get('/api/component-sales/daily', async (req, res) => {
       query.componentSku = sku;
     }
 
-    const dailyData = await DailyComponentSummary.find(query)
+    const dailyData = await dailySummary.find(query)
       .sort({ date: -1, netSold: -1 })
-      .limit(1000);
+      .limit(1000)
+      .toArray();
 
     res.json({
       success: true,
@@ -1669,9 +1477,12 @@ app.get('/api/component-sales/daily', async (req, res) => {
   }
 });
 
-// NEW: Daily breakdown for bundles
+// Daily bundle breakdown
 app.get('/api/bundle-sales/daily', async (req, res) => {
   try {
+    const db = await connectDB();
+    const dailySummary = db.collection('dailyBundleSummary');
+    
     const { days = 7, sku } = req.query;
 
     const daysAgo = new Date();
@@ -1683,9 +1494,10 @@ app.get('/api/bundle-sales/daily', async (req, res) => {
       query.bundleSku = sku;
     }
 
-    const dailyData = await DailyBundleSummary.find(query)
+    const dailyData = await dailySummary.find(query)
       .sort({ date: -1, netSold: -1 })
-      .limit(1000);
+      .limit(1000)
+      .toArray();
 
     res.json({
       success: true,
@@ -1703,11 +1515,12 @@ app.get('/api/bundle-sales/daily', async (req, res) => {
 // HEALTH & TEST ENDPOINTS
 // ============================================
 
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+  const dbConnected = db !== null;
   res.status(200).json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
-    mongoConnected: mongoose.connection.readyState === 1
+    mongoConnected: dbConnected
   });
 });
 
@@ -1742,6 +1555,16 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('\n🛑 Shutting down gracefully...');
+  if (mongoClient) {
+    await mongoClient.close();
+    console.log('✅ MongoDB connection closed');
+  }
+  process.exit(0);
+});
+
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
@@ -1752,7 +1575,7 @@ app.listen(PORT, () => {
 ║                                                        ║
 ║  Tracks: Individual Components + Bundles              ║
 ║                                                        ║
-║  MongoDB: ${mongoose.connection.readyState === 1 ? '✅ Connected'.padEnd(40) : '❌ Disconnected'.padEnd(40)} ║
+║  MongoDB: ${db ? '✅ Connected'.padEnd(40) : '❌ Disconnected'.padEnd(40)} ║
 ║                                                        ║
 ║  Component APIs:                                       ║
 ║  GET /api/component-sales/summary                      ║
