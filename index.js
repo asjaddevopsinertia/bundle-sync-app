@@ -33,6 +33,14 @@ const BUNDLE_CONFIG = {
   ],
   'MG-MLH-MM-08J-DTC-2PK':[
     { sku: 'MG-MLH-MM-08J', quantity: 2 },
+  ],
+  'MG-MIX-05J-DTC-6PK':[
+    { sku: 'MG-PX-MM-05J', quantity: 1 },
+    { sku: 'MG-MLH-MM-05J', quantity: 1 },
+    { sku: 'MG-CCH-MM-05J', quantity: 1 },
+    { sku: 'MG-RVOA-FS-05J', quantity: 1 },
+    { sku: 'MG-OBA-FS-05J', quantity: 1 },
+    { sku: 'MG-NCT-MM-05J', quantity: 1 },
   ]
 };
 
@@ -554,25 +562,25 @@ app.use((err, req, res, next) => {
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-//   console.log(`
-// ╔════════════════════════════════════════════════════════╗
-// ║  Shopify Bundle Inventory Manager                     ║
-// ║  Server running on port ${PORT}                           ║
-// ║                                                        ║
-// ║  Shop: ${SHOPIFY_CONFIG.shop?.padEnd(42) || 'Not configured'.padEnd(42)} ║
-// ║  Token: ${SHOPIFY_CONFIG.accessToken ? '✅ Configured'.padEnd(42) : '❌ Missing'.padEnd(42)} ║
-// ║                                                        ║
-// ║  Configured bundles:                                   ║
-// ${Object.keys(BUNDLE_CONFIG).map(key => `║    - ${key.padEnd(46)} ║`).join('\n')}
-// ║                                                        ║
-// ║  Test endpoints:                                       ║
-// ║    GET  /health                                        ║
-// ║    GET  /test/auth                                     ║
-// ║    GET  /test/variant/:sku                             ║
-// ║    POST /test/adjust-inventory                         ║
-// ║    POST /test/process-order                            ║
-// ╚════════════════════════════════════════════════════════╝
-//   `);
+  console.log(`
+╔════════════════════════════════════════════════════════╗
+║  Shopify Bundle Inventory Manager                     ║
+║  Server running on port ${PORT}                           ║
+║                                                        ║
+║  Shop: ${SHOPIFY_CONFIG.shop?.padEnd(42) || 'Not configured'.padEnd(42)} ║
+║  Token: ${SHOPIFY_CONFIG.accessToken ? '✅ Configured'.padEnd(42) : '❌ Missing'.padEnd(42)} ║
+║                                                        ║
+║  Configured bundles:                                   ║
+${Object.keys(BUNDLE_CONFIG).map(key => `║    - ${key.padEnd(46)} ║`).join('\n')}
+║                                                        ║
+║  Test endpoints:                                       ║
+║    GET  /health                                        ║
+║    GET  /test/auth                                     ║
+║    GET  /test/variant/:sku                             ║
+║    POST /test/adjust-inventory                         ║
+║    POST /test/process-order                            ║
+╚════════════════════════════════════════════════════════╝
+  `);
 
 console.log("server started successfully")
 });
