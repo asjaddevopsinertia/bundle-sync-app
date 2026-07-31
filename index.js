@@ -6,6 +6,8 @@ const axios = require('axios');
 const { MongoClient, ObjectId } = require('mongodb');
 
 const app = express();
+const cors = require('cors');
+app.use(cors());
 
 // ============================================
 // MONGODB CONNECTION
@@ -23,7 +25,7 @@ async function connectDB() {
     await mongoClient.connect();
     console.log('✅ Connected to MongoDB');
     db = mongoClient.db(DB_NAME);
-    
+
     // Create indexes
     await createIndexes();
   }
@@ -33,7 +35,7 @@ async function connectDB() {
 async function createIndexes() {
   try {
     const db = await connectDB();
-    
+
     // Component Sales Indexes
     const componentSales = db.collection('componentSales');
     await componentSales.createIndex({ componentSku: 1, orderDate: -1 });
@@ -42,23 +44,23 @@ async function createIndexes() {
     await componentSales.createIndex({ saleType: 1, orderDate: -1 });
     await componentSales.createIndex({ orderId: 1 });
     await componentSales.createIndex({ processedAt: -1 });
-    
+
     // Bundle Sales Indexes
     const bundleSales = db.collection('bundleSales');
     await bundleSales.createIndex({ bundleSku: 1, orderDate: -1 });
     await bundleSales.createIndex({ orderDate: -1, action: 1 });
     await bundleSales.createIndex({ orderId: 1 });
-    
+
     // Daily Component Summary Indexes
     const dailyComponentSummary = db.collection('dailyComponentSummary');
     await dailyComponentSummary.createIndex({ date: 1, componentSku: 1 }, { unique: true });
     await dailyComponentSummary.createIndex({ date: -1 });
-    
+
     // Daily Bundle Summary Indexes
     const dailyBundleSummary = db.collection('dailyBundleSummary');
     await dailyBundleSummary.createIndex({ date: 1, bundleSku: 1 }, { unique: true });
     await dailyBundleSummary.createIndex({ date: -1 });
-    
+
     console.log('✅ MongoDB indexes created');
   } catch (error) {
     console.error('❌ Error creating indexes:', error.message);
@@ -80,16 +82,16 @@ async function saveComponentSale(saleData) {
   try {
     const db = await connectDB();
     const collection = db.collection('componentSales');
-    
+
     const result = await collection.insertOne({
       ...saleData,
       createdAt: new Date(),
       updatedAt: new Date()
     });
-    
+
     const saleTypeIcon = saleData.saleType === 'direct' ? '🛒' : '📦';
     console.log(`💾 ${saleTypeIcon} Component: ${saleData.componentSku} (${saleData.quantitySold}x) - $${saleData.totalPrice.toFixed(2)} [${saleData.saleType}]`);
-    
+
     return result;
   } catch (error) {
     console.error('❌ Error saving component sale:', error.message);
@@ -102,15 +104,15 @@ async function saveBundleSale(saleData) {
   try {
     const db = await connectDB();
     const collection = db.collection('bundleSales');
-    
+
     const result = await collection.insertOne({
       ...saleData,
       createdAt: new Date(),
       updatedAt: new Date()
     });
-    
+
     console.log(`💾 📦 Bundle: ${saleData.bundleSku} (${saleData.quantitySold}x) - $${saleData.totalPrice.toFixed(2)}`);
-    
+
     return result;
   } catch (error) {
     console.error('❌ Error saving bundle sale:', error.message);
@@ -124,13 +126,13 @@ async function updateDailyComponentSummary(componentSku, date) {
     const db = await connectDB();
     const componentSales = db.collection('componentSales');
     const dailySummary = db.collection('dailyComponentSummary');
-    
+
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
-    
+
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
-    
+
     // Aggregate sales for this component on this day
     const aggregation = await componentSales.aggregate([
       {
@@ -157,10 +159,12 @@ async function updateDailyComponentSummary(componentSku, date) {
           directSales: {
             $sum: {
               $cond: [
-                { $and: [
-                  { $eq: ['$action', 'sale'] },
-                  { $eq: ['$saleType', 'direct'] }
-                ]},
+                {
+                  $and: [
+                    { $eq: ['$action', 'sale'] },
+                    { $eq: ['$saleType', 'direct'] }
+                  ]
+                },
                 '$quantitySold',
                 0
               ]
@@ -169,10 +173,12 @@ async function updateDailyComponentSummary(componentSku, date) {
           bundleSales: {
             $sum: {
               $cond: [
-                { $and: [
-                  { $eq: ['$action', 'sale'] },
-                  { $eq: ['$saleType', 'bundle'] }
-                ]},
+                {
+                  $and: [
+                    { $eq: ['$action', 'sale'] },
+                    { $eq: ['$saleType', 'bundle'] }
+                  ]
+                },
                 '$quantitySold',
                 0
               ]
@@ -199,7 +205,7 @@ async function updateDailyComponentSummary(componentSku, date) {
       const totalProfit = stats.totalRevenue - stats.totalCost;
 
       await dailySummary.updateOne(
-        { 
+        {
           date: startOfDay,
           componentSku: componentSku
         },
@@ -231,6 +237,7 @@ async function updateDailyComponentSummary(componentSku, date) {
   }
 }
 
+// Update daily bundle summary
 // Update daily bundle summary
 async function updateDailyBundleSummary(bundleSku, date) {
   try {
@@ -265,9 +272,40 @@ async function updateDailyBundleSummary(bundleSku, date) {
               $cond: [{ $in: ['$action', ['refund', 'cancellation']] }, '$quantitySold', 0]
             }
           },
+          // 🔥 Track fulfilled bundles
+          fulfilledSold: {
+            $sum: {
+              $cond: [
+                { $and: [
+                  { $eq: ['$action', 'sale'] },
+                  { $eq: ['$isFulfilled', true] }
+                ]},
+                '$quantitySold',
+                0
+              ]
+            }
+          },
+          // 🔥 Track unfulfilled bundles
+          unfulfilledSold: {
+            $sum: {
+              $cond: [
+                { $and: [
+                  { $eq: ['$action', 'sale'] },
+                  { $eq: ['$isFulfilled', false] }
+                ]},
+                '$quantitySold',
+                0
+              ]
+            }
+          },
           totalRevenue: {
             $sum: {
               $cond: [{ $eq: ['$action', 'sale'] }, '$totalPrice', 0]
+            }
+          },
+          totalCost: {
+            $sum: {
+              $cond: [{ $eq: ['$action', 'sale'] }, '$totalCost', 0]
             }
           },
           orderCount: { $sum: 1 }
@@ -278,6 +316,27 @@ async function updateDailyBundleSummary(bundleSku, date) {
     if (aggregation.length > 0) {
       const stats = aggregation[0];
       const netSold = stats.totalSold - stats.totalRefunded;
+      const totalProfit = stats.totalRevenue - stats.totalCost;
+
+      const updateDoc = {
+        bundleProductName: stats.productName,
+        totalSold: stats.totalSold,
+        totalRefunded: stats.totalRefunded,
+        netSold: netSold,
+        totalRevenue: stats.totalRevenue,
+        totalCost: stats.totalCost,
+        totalProfit: totalProfit,
+        orderCount: stats.orderCount,
+        lastUpdated: new Date(),
+        updatedAt: new Date()
+      };
+
+      // 🔥 Only add fulfillment data for fruit bundles
+      if (bundleSku.includes('GND-FRT')) {
+        updateDoc.fulfilledSold = stats.fulfilledSold;
+        updateDoc.unfulfilledSold = stats.unfulfilledSold;
+        updateDoc.netUnfulfilled = stats.unfulfilledSold; // What gardeners need to pack
+      }
 
       await dailySummary.updateOne(
         { 
@@ -285,16 +344,7 @@ async function updateDailyBundleSummary(bundleSku, date) {
           bundleSku: bundleSku
         },
         {
-          $set: {
-            bundleProductName: stats.productName,
-            totalSold: stats.totalSold,
-            totalRefunded: stats.totalRefunded,
-            netSold: netSold,
-            totalRevenue: stats.totalRevenue,
-            orderCount: stats.orderCount,
-            lastUpdated: new Date(),
-            updatedAt: new Date()
-          },
+          $set: updateDoc,
           $setOnInsert: {
             createdAt: new Date()
           }
@@ -308,129 +358,58 @@ async function updateDailyBundleSummary(bundleSku, date) {
     console.error('❌ Error updating daily bundle summary:', error.message);
   }
 }
-
 // ============================================
 // PRODUCT PRICING & COST CONFIGURATION
 // ============================================
 
 const COMPONENT_PRICING = {
-  // 8oz products
-  'MG-SML-FS-08J': { 
-    price: 13.99, 
-    cost: 2.59, 
-    weight: '8oz',
-    name: 'Strawberry & Meyer Lemon Fruit Spread'
-  },
-  'MG-RTT-FS-08J': { 
-    price: 13.99, 
-    cost: 3.12, 
-    weight: '8oz',
-    name: 'Raspberry & Tango Tangerine Fruit Spread'
-  },
-  'MG-PX-MM-08J': { 
-    price: 13.99, 
-    cost: 2.42, 
-    weight: '8oz',
-    name: '"Sunrise" Pixie Tangerine Marmalade'
-  },
-  'MG-RVOA-FS-08J': { 
-    price: 13.99, 
-    cost: 2.60, 
-    weight: '8oz',
-    name: 'Ruby Valencia & Apricot Fruit Spread'
-  },
-  'MG-CCH-MM-08J': { 
-    price: 13.99, 
-    cost: 2.66, 
-    weight: '8oz',
-    name: 'Cara Cara & Hibiscus Marmalade'
-  },
-  'MG-MLH-MM-08J': { 
-    price: 13.99, 
-    cost: 2.82, 
-    weight: '8oz',
-    name: 'Meyer Lemon & Honey Marmalade'
-  },
-  
-  // 5oz products
-  'MG-PX-MM-05J': { 
-    price: 9.00, 
-    cost: 1.93, 
-    weight: '5oz',
-    name: '"Sunrise" Pixie Tangerine Marmalade'
-  },
-  'MG-MLH-MM-05J': { 
-    price: 9.00, 
-    cost: 1.93, 
-    weight: '5oz',
-    name: 'Meyer Lemon & Honey Marmalade'
-  },
-  'MG-CCH-MM-05J': { 
-    price: 9.00, 
-    cost: 1.93, 
-    weight: '5oz',
-    name: 'Cara Cara & Hibiscus Marmalade'
-  },
-  'MG-RVOA-FS-05J': { 
-    price: 9.00, 
-    cost: 2.14, 
-    weight: '4.5oz',
-    name: 'Ruby Valencia & Apricot Fruit Spread'
-  },
-  'MG-OBA-FS-05J': { 
-    price: 9.00, 
-    cost: 2.07, 
-    weight: '4.5oz',
-    name: 'Oroblanco & Agave Fruit Spread'
-  },
-  'MG-NCT-MM-05J': { 
-    price: 9.00, 
-    cost: 1.93, 
-    weight: '4.5oz',
-    name: '"Tea Time" Navel Orange & Ceylon Tea Marmalade'
-  },
-  
-  // 4.5oz products (if you have any)
-  // Add more as needed
+  'MG-SML-FS-08J': { price: 13.99, cost: 2.59, weight: '8oz', name: 'Strawberry & Meyer Lemon Fruit Spread' },
+  'MG-RTT-FS-08J': { price: 13.99, cost: 3.12, weight: '8oz', name: 'Raspberry & Tango Tangerine Fruit Spread' },
+  'MG-PX-MM-08J': { price: 13.99, cost: 2.42, weight: '8oz', name: '"Sunrise" Pixie Tangerine Marmalade' },
+  'MG-RVOA-FS-08J': { price: 13.99, cost: 2.60, weight: '8oz', name: 'Ruby Valencia & Apricot Fruit Spread' },
+  'MG-CCH-MM-08J': { price: 13.99, cost: 2.66, weight: '8oz', name: 'Cara Cara & Hibiscus Marmalade' },
+  'MG-MLH-MM-08J': { price: 13.99, cost: 2.82, weight: '8oz', name: 'Meyer Lemon & Honey Marmalade' },
+  'MG-PX-MM-05J': { price: 9.00, cost: 1.93, weight: '5oz', name: '"Sunrise" Pixie Tangerine Marmalade' },
+  'MG-MLH-MM-05J': { price: 9.00, cost: 1.93, weight: '5oz', name: 'Meyer Lemon & Honey Marmalade' },
+  'MG-CCH-MM-05J': { price: 9.00, cost: 1.93, weight: '5oz', name: 'Cara Cara & Hibiscus Marmalade' },
+  'MG-RVOA-FS-05J': { price: 9.00, cost: 2.14, weight: '4.5oz', name: 'Ruby Valencia & Apricot Fruit Spread' },
+  'MG-OBA-FS-05J': { price: 9.00, cost: 2.07, weight: '4.5oz', name: 'Oroblanco & Agave Fruit Spread' },
+  'MG-NCT-MM-05J': { price: 9.00, cost: 1.93, weight: '4.5oz', name: '"Tea Time" Navel Orange & Ceylon Tea Marmalade' },
+  'MG-GND-FRT-01LB': {
+    price: 13.00,
+    cost: 1.35,
+    weight: '1LB',
+    name: 'Golden Nugget Tangerines'
+  }
 };
 
 // NEW: Bundle Pricing (actual bundle prices from Shopify)
 const BUNDLE_PRICING = {
-  'MG-SML-FS-08J-DTC-2PK': {
-    price: 24.00, // Your actual bundle price
-    name: '2-Pack Strawberry & Meyer Lemon Fruit Spread'
+  'MG-SML-FS-08J-DTC-2PK': { price: 24.00, cost: 5.18, name: '2-Pack Strawberry & Meyer Lemon Fruit Spread' },
+  'MG-RTT-FS-08J-DTC-2PK': { price: 24.00, cost: 6.25, name: '2-Pack Raspberry & Tango Tangerine Fruit Spread' },
+  'MG-PX-MM-08J-DTC-2PK': { price: 24.00, cost: 4.84, name: '2-Pack "Sunrise" Pixie Tangerine Marmalade' },
+  'MG-RVOA-FS-08J-DTC-2PK': { price: 24.00, cost: 5.37, name: '2-Pack Ruby Valencia & Apricot Fruit Spread' },
+  'MG-CCH-MM-08J-DTC-2PK': { price: 24.00, cost: 5.32, name: '2-Pack Cara Cara & Hibiscus Marmalade' },
+  'MG-MLH-MM-08J-DTC-2PK': { price: 24.00, cost: 5.64, name: '2-Pack Meyer Lemon & Honey Marmalade' },
+  'MG-MIX-05J-DTC-6PK': { price: 60.00, cost: 11.79, name: '"Party Of Six" Gift Set' },
+  'MG-GND-FRT-05LB': {
+    price: 65.00,
+    cost: 10.03,
+    name: 'Golden Nugget Tangerines - 5LB Fruit Box'
+
   },
-  'MG-RTT-FS-08J-DTC-2PK': {
-    price: 24.00,
-    name: '2-Pack Raspberry & Tango Tangerine Fruit Spread'
+  'MG-GND-FRT-10LB': {
+    price: 99.00,
+    cost: 19.13,
+    name: 'Golden Nugget Tangerines - 10LB Fruit Box'
   },
-  'MG-PX-MM-08J-DTC-2PK': {
-    price: 24.00,
-    name: '2-Pack "Sunrise" Pixie Tangerine Marmalade'
-  },
-  'MG-RVOA-FS-08J-DTC-2PK': {
-    price: 24.00,
-    name: '2-Pack Ruby Valencia & Apricot Fruit Spread'
-  },
-  'MG-CCH-MM-08J-DTC-2PK': {
-    price: 24.00,
-    name: '2-Pack Cara Cara & Hibiscus Marmalade'
-  },
-  'MG-MLH-MM-08J-DTC-2PK': {
-    price: 24.00,
-    name: '2-Pack Meyer Lemon & Honey Marmalade'
-  },
-  'MG-MIX-05J-DTC-6PK': {
-    price: 60.00, // Your actual 6-pack price
-    name: '"Party Of Six" Gift Set'
-  }
 };
 
 function getComponentPricing(sku) {
   if (COMPONENT_PRICING[sku]) {
     return COMPONENT_PRICING[sku];
   }
-  
+
   console.warn(`⚠️  No pricing found for SKU: ${sku}, using defaults`);
   return {
     price: 0,
@@ -444,10 +423,11 @@ function getBundlePricing(sku) {
   if (BUNDLE_PRICING[sku]) {
     return BUNDLE_PRICING[sku];
   }
-  
+
   console.warn(`⚠️  No bundle pricing found for SKU: ${sku}`);
   return {
     price: 0,
+    cost: 0,
     name: sku
   };
 }
@@ -468,24 +448,12 @@ const SHOPIFY_CONFIG = {
 };
 
 const BUNDLE_CONFIG = {
-  'MG-SML-FS-08J-DTC-2PK': [
-    { sku: 'MG-SML-FS-08J', quantity: 2 },
-  ],
-  'MG-RTT-FS-08J-DTC-2PK': [
-    { sku: 'MG-RTT-FS-08J', quantity: 2 },
-  ],
-  'MG-PX-MM-08J-DTC-2PK': [
-    { sku: 'MG-PX-MM-08J', quantity: 2 },
-  ],
-  'MG-RVOA-FS-08J-DTC-2PK': [
-    { sku: 'MG-RVOA-FS-08J', quantity: 2 },
-  ],
-  'MG-CCH-MM-08J-DTC-2PK': [
-    { sku: 'MG-CCH-MM-08J', quantity: 2 },
-  ],
-  'MG-MLH-MM-08J-DTC-2PK': [
-    { sku: 'MG-MLH-MM-08J', quantity: 2 },
-  ],
+  'MG-SML-FS-08J-DTC-2PK': [{ sku: 'MG-SML-FS-08J', quantity: 2 }],
+  'MG-RTT-FS-08J-DTC-2PK': [{ sku: 'MG-RTT-FS-08J', quantity: 2 }],
+  'MG-PX-MM-08J-DTC-2PK': [{ sku: 'MG-PX-MM-08J', quantity: 2 }],
+  'MG-RVOA-FS-08J-DTC-2PK': [{ sku: 'MG-RVOA-FS-08J', quantity: 2 }],
+  'MG-CCH-MM-08J-DTC-2PK': [{ sku: 'MG-CCH-MM-08J', quantity: 2 }],
+  'MG-MLH-MM-08J-DTC-2PK': [{ sku: 'MG-MLH-MM-08J', quantity: 2 }],
   'MG-MIX-05J-DTC-6PK': [
     { sku: 'MG-PX-MM-05J', quantity: 1 },
     { sku: 'MG-MLH-MM-05J', quantity: 1 },
@@ -493,7 +461,13 @@ const BUNDLE_CONFIG = {
     { sku: 'MG-RVOA-FS-05J', quantity: 1 },
     { sku: 'MG-OBA-FS-05J', quantity: 1 },
     { sku: 'MG-NCT-MM-05J', quantity: 1 },
-  ]
+  ],
+  'MG-GND-FRT-05LB': [
+    { sku: 'MG-GND-FRT-01LB', quantity: 5 },
+  ],
+  'MG-GND-FRT-10LB': [
+    { sku: 'MG-GND-FRT-01LB', quantity: 10 },
+  ],
 };
 
 function getAccessToken() {
@@ -505,7 +479,7 @@ function getAccessToken() {
 
 async function shopifyGraphQL(query, variables = {}) {
   const accessToken = getAccessToken();
-  
+
   try {
     const response = await axios.post(
       `https://${SHOPIFY_CONFIG.shop}/admin/api/${SHOPIFY_CONFIG.apiVersion}/graphql.json`,
@@ -554,7 +528,7 @@ app.use((req, res, next) => {
 const verifyWebhook = (req, res, next) => {
   const hmac = req.get('X-Shopify-Hmac-Sha256');
   const body = req.rawBody || JSON.stringify(req.body);
-  
+
   const hash = crypto
     .createHmac('sha256', SHOPIFY_CONFIG.webhookSecret)
     .update(body, 'utf8')
@@ -657,7 +631,7 @@ async function getVariantBySKU(sku) {
     if (productEdges.length > 0) {
       const product = productEdges[0].node;
       const variant = product.variants.edges[0]?.node;
-      
+
       if (variant) {
         return {
           id: variant.id,
@@ -684,9 +658,9 @@ async function getVariantBySKU(sku) {
 async function adjustInventory(sku, quantityDelta, reason = 'other') {
   try {
     console.log(`🔄 Adjusting inventory for SKU: ${sku}, Delta: ${quantityDelta}`);
-    
+
     const variant = await getVariantBySKU(sku);
-    
+
     if (!variant) {
       console.error(`❌ Variant not found for SKU: ${sku}`);
       return { success: false, error: 'Variant not found' };
@@ -698,7 +672,7 @@ async function adjustInventory(sku, quantityDelta, reason = 'other') {
     console.log(`   Current: ${currentInventory}, New: ${newInventory} (${quantityDelta > 0 ? '+' : ''}${quantityDelta})`);
 
     const inventoryLevel = variant.inventoryItem?.inventoryLevels?.edges[0]?.node;
-    
+
     if (!inventoryLevel) {
       console.error(`❌ No inventory level found for SKU: ${sku}`);
       return { success: false, error: 'No inventory level found' };
@@ -708,7 +682,7 @@ async function adjustInventory(sku, quantityDelta, reason = 'other') {
     const locationId = inventoryLevel.location.id.split('/').pop();
 
     const accessToken = getAccessToken();
-    
+
     const response = await axios.post(
       `https://${SHOPIFY_CONFIG.shop}/admin/api/${SHOPIFY_CONFIG.apiVersion}/inventory_levels/set.json`,
       {
@@ -726,9 +700,9 @@ async function adjustInventory(sku, quantityDelta, reason = 'other') {
 
     if (response.data && response.data.inventory_level) {
       console.log(`✅ Success: ${sku} inventory set to ${response.data.inventory_level.available}`);
-      
-      return { 
-        success: true, 
+
+      return {
+        success: true,
         oldQuantity: currentInventory,
         newQuantity: response.data.inventory_level.available,
         sku: sku,
@@ -755,32 +729,34 @@ async function adjustInventory(sku, quantityDelta, reason = 'other') {
 async function saveDirectIndividualSale(item, orderData, action = 'sale') {
   const sku = item.sku;
   const quantity = item.quantity;
-  
+
   if (!isTrackableIndividual(sku)) {
     console.log(`ℹ️  SKU ${sku} is not a trackable individual product, skipping`);
     return null;
   }
 
   console.log(`\n🛒 Processing direct sale: ${sku} (${quantity}x)`);
-  
+
   const pricingInfo = getComponentPricing(sku);
   const variant = await getVariantBySKU(sku);
-  
-  const unitPrice = pricingInfo.price;
-  const unitCost = pricingInfo.cost;
-  const totalPrice = unitPrice * quantity;
+
+  // 🔥 USE ACTUAL PRICE FROM SHOPIFY, NOT HARDCODED
+  const totalPrice = parseFloat(item.price) * quantity; // From Shopify order
+  const unitPrice = parseFloat(item.price); // Actual price customer paid
+
+  const unitCost = pricingInfo.cost; // Hardcoded cost
   const totalCost = unitCost * quantity;
   const profit = totalPrice - totalCost;
-  
+
   try {
     const saleData = {
       componentSku: sku,
       componentProductName: variant?.displayName || pricingInfo.name || sku,
       quantitySold: quantity,
       weight: pricingInfo.weight,
-      unitPrice: unitPrice,
-      unitCost: unitCost,
-      totalPrice: totalPrice,
+      unitPrice: unitPrice, // Actual Shopify price
+      unitCost: unitCost,   // Hardcoded cost
+      totalPrice: totalPrice, // Actual revenue from Shopify
       totalCost: totalCost,
       profit: profit,
       saleType: 'direct',
@@ -797,7 +773,7 @@ async function saveDirectIndividualSale(item, orderData, action = 'sale') {
 
     await saveComponentSale(saleData);
     await updateDailyComponentSummary(sku, saleData.orderDate);
-    
+
     return saleData;
   } catch (dbError) {
     console.error('❌ Failed to save direct sale to MongoDB:', dbError.message);
@@ -807,7 +783,7 @@ async function saveDirectIndividualSale(item, orderData, action = 'sale') {
 
 async function processLineItems(lineItems, action = 'reduce', orderData = {}) {
   const results = [];
-  
+
   for (const item of lineItems) {
     const sku = item.sku;
     const quantity = item.quantity;
@@ -819,20 +795,36 @@ async function processLineItems(lineItems, action = 'reduce', orderData = {}) {
 
     if (BUNDLE_CONFIG[sku]) {
       console.log(`\n📦 Processing bundle: ${sku} (${quantity}x)`);
-      
+
       const bundleVariant = await getVariantBySKU(sku);
       const bundleProductName = bundleVariant?.displayName || item.title || sku;
-      
+
       const bundlePricing = getBundlePricing(sku);
-      
+      const bundleComponents = BUNDLE_CONFIG[sku];
+
+      // 🔥 USE ACTUAL PRICE FROM SHOPIFY
+      const actualBundleUnitPrice = parseFloat(item.price); // What customer actually paid
+      const actualBundleTotalPrice = actualBundleUnitPrice * quantity;
+      const bundleUnitCost = bundlePricing.cost; // Hardcoded bundle cost
+      const bundleTotalCost = bundleUnitCost * quantity;
+
+      // Calculate total component value for proportional allocation
+      const totalComponentValue = bundleComponents.reduce((sum, comp) => {
+        const compPricing = getComponentPricing(comp.sku);
+        return sum + (compPricing.price * comp.quantity);
+      }, 0);
+
       try {
         const bundleSaleData = {
           bundleSku: sku,
           bundleProductName: bundleProductName,
           quantitySold: quantity,
-          unitPrice: bundlePricing.price,
-          totalPrice: bundlePricing.price * quantity,
-          components: BUNDLE_CONFIG[sku].map(comp => {
+          unitPrice: actualBundleUnitPrice, // Actual Shopify price
+          totalPrice: actualBundleTotalPrice, // Actual revenue
+          unitCost: bundleUnitCost, // Hardcoded bundle cost
+          totalCost: bundleTotalCost,
+          profit: actualBundleTotalPrice - bundleTotalCost,
+          components: bundleComponents.map(comp => {
             const compPricing = getComponentPricing(comp.sku);
             return {
               sku: comp.sku,
@@ -849,47 +841,84 @@ async function processLineItems(lineItems, action = 'reduce', orderData = {}) {
 
         await saveBundleSale(bundleSaleData);
         await updateDailyBundleSummary(sku, bundleSaleData.orderDate);
-        
+
       } catch (dbError) {
         console.error('❌ Failed to save bundle to MongoDB:', dbError.message);
       }
-      
-      const components = BUNDLE_CONFIG[sku];
-      
-      for (const component of components) {
+
+      // Process each component with ALLOCATED bundle pricing
+      // In processLineItems() function, replace the component allocation section:
+
+      // Process each component with ALLOCATED bundle pricing
+      for (const component of bundleComponents) {
         const totalQuantity = component.quantity * quantity;
         const quantityDelta = action === 'reduce' ? -totalQuantity : totalQuantity;
-        
+
         console.log(`   ${action === 'reduce' ? '➖' : '➕'} ${component.sku}: ${Math.abs(totalQuantity)}`);
-        
+
         const result = await adjustInventory(
-          component.sku, 
+          component.sku,
           quantityDelta,
           action === 'reduce' ? 'sold' : 'returned'
         );
-        
+
         const pricingInfo = getComponentPricing(component.sku);
-        
-        const unitPrice = pricingInfo.price;
-        const unitCost = pricingInfo.cost;
-        const totalPrice = unitPrice * totalQuantity;
-        const totalCost = unitCost * totalQuantity;
-        const profit = totalPrice - totalCost;
-        
+
+        // 🔥 SPECIAL HANDLING for MG-MIX-05J-DTC-6PK (6-pack variety set)
+        let allocatedBundleRevenue;
+        let allocatedUnitPrice;
+        let totalCost;
+        let unitCost;
+        let valueRatio;
+
+        if (sku === 'MG-MIX-05J-DTC-6PK') {
+          // Split revenue equally among 6 different items
+          const itemsInSet = 6;
+          allocatedBundleRevenue = (actualBundleTotalPrice / itemsInSet) * quantity;
+          allocatedUnitPrice = allocatedBundleRevenue / totalQuantity;
+
+          // Split cost equally among 6 different items
+          const allocatedBundleCost = (bundleTotalCost / itemsInSet) * quantity;
+          totalCost = allocatedBundleCost;
+          unitCost = allocatedBundleCost / totalQuantity;
+
+          valueRatio = 1 / itemsInSet; // Each item is 1/6th of the bundle
+
+          console.log(`   💰 6-Pack split (1/6): Revenue $${allocatedBundleRevenue.toFixed(2)}, Cost $${allocatedBundleCost.toFixed(2)}`);
+        }
+        else {
+          // Standard proportional allocation for all other bundles (2-packs, 5lb, 10lb)
+          const componentIndividualValue = pricingInfo.price * component.quantity;
+          valueRatio = componentIndividualValue / totalComponentValue;
+          allocatedBundleRevenue = actualBundleTotalPrice * valueRatio;
+          allocatedUnitPrice = allocatedBundleRevenue / totalQuantity;
+
+          // Use individual component cost (not bundle cost)
+          unitCost = pricingInfo.cost;
+          totalCost = unitCost * totalQuantity;
+
+          console.log(`   💰 Allocated revenue: $${allocatedBundleRevenue.toFixed(2)} (${(valueRatio * 100).toFixed(1)}% of $${actualBundleTotalPrice.toFixed(2)} bundle)`);
+        }
+
+        const profit = allocatedBundleRevenue - totalCost;
+
         try {
           const saleData = {
             componentSku: component.sku,
             componentProductName: result.productName || pricingInfo.name || component.sku,
             quantitySold: totalQuantity,
             weight: pricingInfo.weight,
-            unitPrice: unitPrice,
-            unitCost: unitCost,
-            totalPrice: totalPrice,
+            unitPrice: allocatedUnitPrice,  // Allocated from actual Shopify price
+            unitCost: unitCost, // Either allocated bundle cost (6-pack) or individual cost (others)
+            totalPrice: allocatedBundleRevenue, // Allocated revenue
             totalCost: totalCost,
             profit: profit,
             saleType: 'bundle',
             bundleSku: sku,
             bundleProductName: bundleProductName,
+            bundleActualPrice: actualBundleUnitPrice,
+            bundleAllocatedRevenue: allocatedBundleRevenue,
+            bundleValueRatio: valueRatio,
             orderId: orderData.id?.toString() || 'unknown',
             orderName: orderData.name || orderData.order_number || 'N/A',
             orderDate: orderData.created_at ? new Date(orderData.created_at) : new Date(),
@@ -901,29 +930,30 @@ async function processLineItems(lineItems, action = 'reduce', orderData = {}) {
 
           await saveComponentSale(saleData);
           await updateDailyComponentSummary(component.sku, saleData.orderDate);
-          
+
         } catch (dbError) {
           console.error('❌ Failed to save to MongoDB:', dbError.message);
         }
-        
+
         results.push({
           type: 'bundle',
           bundleSku: sku,
           componentSku: component.sku,
           quantity: totalQuantity,
+          allocatedRevenue: allocatedBundleRevenue,
           action,
           result
         });
 
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-    } 
+    }
     else if (isTrackableIndividual(sku)) {
       console.log(`\n🛒 Processing direct individual sale: ${sku} (${quantity}x)`);
-      
+
       const actionType = action === 'reduce' ? 'sale' : action === 'restore' ? 'cancellation' : action;
       const saleData = await saveDirectIndividualSale(item, orderData, actionType);
-      
+
       if (saleData) {
         results.push({
           type: 'direct',
@@ -938,7 +968,7 @@ async function processLineItems(lineItems, action = 'reduce', orderData = {}) {
       console.log(`ℹ️  SKU ${sku} is not a bundle or trackable individual, skipping`);
     }
   }
-  
+
   return results;
 }
 
@@ -948,17 +978,17 @@ async function processLineItems(lineItems, action = 'reduce', orderData = {}) {
 
 app.post('/webhooks/orders/create', verifyWebhook, async (req, res) => {
   console.log('\n📝 Order created webhook received');
-  
+
   res.status(200).send('OK');
-  
+
   try {
     const order = req.body;
     const lineItems = order.line_items;
-    
+
     console.log(`Processing order ${order.name} with ${lineItems.length} items`);
-    
+
     const results = await processLineItems(lineItems, 'reduce', order);
-    
+
     console.log('✅ Order processing complete');
     if (results.length > 0) {
       console.table(results.map(r => ({
@@ -976,17 +1006,17 @@ app.post('/webhooks/orders/create', verifyWebhook, async (req, res) => {
 
 app.post('/webhooks/orders/cancelled', verifyWebhook, async (req, res) => {
   console.log('\n🚫 Order cancelled webhook received');
-  
+
   res.status(200).send('OK');
-  
+
   try {
     const order = req.body;
     const lineItems = order.line_items;
-    
+
     console.log(`Processing cancellation for order ${order.name}`);
-    
+
     const results = await processLineItems(lineItems, 'restore', order);
-    
+
     console.log('✅ Order cancellation processing complete');
   } catch (error) {
     console.error('❌ Error processing order cancellation:', error);
@@ -995,22 +1025,22 @@ app.post('/webhooks/orders/cancelled', verifyWebhook, async (req, res) => {
 
 app.post('/webhooks/orders/edited', verifyWebhook, async (req, res) => {
   console.log('\n✏️ Order edited webhook received');
-  
+
   res.status(200).send('OK');
-  
+
   try {
     const orderEdit = req.body;
-    
+
     if (orderEdit.line_items_removed && orderEdit.line_items_removed.length > 0) {
       console.log('Processing removed items...');
       await processLineItems(orderEdit.line_items_removed, 'restore', orderEdit);
     }
-    
+
     if (orderEdit.line_items_added && orderEdit.line_items_added.length > 0) {
       console.log('Processing added items...');
       await processLineItems(orderEdit.line_items_added, 'reduce', orderEdit);
     }
-    
+
     console.log('✅ Order edit processing complete');
   } catch (error) {
     console.error('❌ Error processing order edit:', error);
@@ -1022,53 +1052,61 @@ app.post('/webhooks/orders/edited', verifyWebhook, async (req, res) => {
 // ============================================
 
 // Component sales summary
+// backend/routes/componentSales.js
+
 app.get('/api/component-sales/summary', async (req, res) => {
   try {
-    const db = await connectDB();
+    const { startDate, endDate } = req.query;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'startDate and endDate are required'
+      });
+    }
+
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
     const componentSales = db.collection('componentSales');
-    
-    const { 
-      days = 7,
-      startDate,
-      endDate,
-      saleType
-    } = req.query;
 
-    let dateQuery = {};
-    if (startDate && endDate) {
-      dateQuery = {
-        orderDate: {
-          $gte: new Date(startDate),
-          $lte: new Date(endDate)
+    // Aggregate component sales with fulfillment tracking
+    const components = await componentSales.aggregate([
+      {
+        $match: {
+          orderDate: { $gte: start, $lte: end },
+          action: 'sale'
         }
-      };
-    } else {
-      const daysAgo = new Date();
-      daysAgo.setDate(daysAgo.getDate() - parseInt(days));
-      dateQuery = {
-        orderDate: { $gte: daysAgo }
-      };
-    }
-
-    let matchQuery = {
-      ...dateQuery,
-      action: 'sale'
-    };
-
-    if (saleType) {
-      matchQuery.saleType = saleType;
-    }
-
-    const summary = await componentSales.aggregate([
-      { $match: matchQuery },
+      },
       {
         $group: {
           _id: '$componentSku',
           productName: { $first: '$componentProductName' },
           weight: { $first: '$weight' },
-          unitPrice: { $first: '$unitPrice' },
-          unitCost: { $first: '$unitCost' },
-          totalQuantitySold: { $sum: '$quantitySold' },
+          quantitySold: { $sum: '$quantitySold' },
+          // Sum fulfilled quantities (only for items with isFulfilled field)
+          fulfilledSold: {
+            $sum: {
+              $cond: [
+                { $eq: ['$isFulfilled', true] },
+                '$quantitySold',
+                0
+              ]
+            }
+          },
+          // Sum unfulfilled quantities (only for items with isFulfilled field)
+          unfulfilledSold: {
+            $sum: {
+              $cond: [
+                { $eq: ['$isFulfilled', false] },
+                '$quantitySold',
+                0
+              ]
+            }
+          },
           directSales: {
             $sum: {
               $cond: [{ $eq: ['$saleType', 'direct'] }, '$quantitySold', 0]
@@ -1081,37 +1119,38 @@ app.get('/api/component-sales/summary', async (req, res) => {
           },
           totalRevenue: { $sum: '$totalPrice' },
           totalCost: { $sum: '$totalCost' },
-          totalProfit: { $sum: '$profit' },
-          orderCount: { $addToSet: '$orderId' }
+          totalProfit: { $sum: '$profit' }
         }
       },
       {
         $project: {
-          _id: 0,
           componentSku: '$_id',
           productName: 1,
           weight: 1,
-          unitPrice: 1,
-          unitCost: 1,
-          quantitySold: '$totalQuantitySold',
+          quantitySold: 1,
+          fulfilledSold: 1,
+          unfulfilledSold: 1,
           directSales: 1,
           bundleSales: 1,
           totalRevenue: { $round: ['$totalRevenue', 2] },
           totalCost: { $round: ['$totalCost', 2] },
           totalProfit: { $round: ['$totalProfit', 2] },
-          orderCount: { $size: '$orderCount' },
-          avgProfitPerUnit: { 
+          avgProfitPerUnit: {
             $round: [
-              { $divide: ['$totalProfit', '$totalQuantitySold'] }, 
+              { $divide: ['$totalProfit', '$quantitySold'] },
               2
-            ] 
-          }
+            ]
+          },
+          _id: 0
         }
       },
-      { $sort: { quantitySold: -1 } }
+      {
+        $sort: { totalRevenue: -1 }
+      }
     ]).toArray();
 
-    const grandTotals = summary.reduce((acc, item) => {
+    // Calculate totals
+    const totals = components.reduce((acc, item) => {
       acc.totalUnits += item.quantitySold;
       acc.directSales += item.directSales;
       acc.bundleSales += item.bundleSales;
@@ -1119,34 +1158,38 @@ app.get('/api/component-sales/summary', async (req, res) => {
       acc.totalCost += item.totalCost;
       acc.totalProfit += item.totalProfit;
       return acc;
-    }, { totalUnits: 0, directSales: 0, bundleSales: 0, totalRevenue: 0, totalCost: 0, totalProfit: 0 });
+    }, {
+      totalUnits: 0,
+      directSales: 0,
+      bundleSales: 0,
+      totalRevenue: 0,
+      totalCost: 0,
+      totalProfit: 0
+    });
+
+    totals.profitMargin = totals.totalRevenue > 0
+      ? ((totals.totalProfit / totals.totalRevenue) * 100).toFixed(2)
+      : 0;
 
     res.json({
       success: true,
-      period: {
-        days: parseInt(days),
-        startDate: dateQuery.orderDate?.$gte,
-        endDate: dateQuery.orderDate?.$lte || new Date()
-      },
       summary: {
-        components: summary,
-        totals: {
-          totalUnits: grandTotals.totalUnits,
-          directSales: grandTotals.directSales,
-          bundleSales: grandTotals.bundleSales,
-          totalRevenue: Math.round(grandTotals.totalRevenue * 100) / 100,
-          totalCost: Math.round(grandTotals.totalCost * 100) / 100,
-          totalProfit: Math.round(grandTotals.totalProfit * 100) / 100,
-          profitMargin: grandTotals.totalRevenue > 0 
-            ? Math.round((grandTotals.totalProfit / grandTotals.totalRevenue) * 100 * 100) / 100
-            : 0
+        components,
+        totals,
+        dateRange: {
+          start: start.toISOString(),
+          end: end.toISOString()
         }
       }
     });
 
   } catch (error) {
     console.error('Error fetching component sales summary:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch component sales summary',
+      error: error.message
+    });
   }
 });
 
@@ -1155,8 +1198,8 @@ app.get('/api/bundle-sales/summary', async (req, res) => {
   try {
     const db = await connectDB();
     const bundleSales = db.collection('bundleSales');
-    
-    const { 
+
+    const {
       days = 7,
       startDate,
       endDate
@@ -1179,11 +1222,11 @@ app.get('/api/bundle-sales/summary', async (req, res) => {
     }
 
     const summary = await bundleSales.aggregate([
-      { 
-        $match: { 
+      {
+        $match: {
           ...dateQuery,
           action: 'sale'
-        } 
+        }
       },
       {
         $group: {
@@ -1244,7 +1287,7 @@ app.get('/api/component-sales/:sku', async (req, res) => {
   try {
     const db = await connectDB();
     const componentSales = db.collection('componentSales');
-    
+
     const { sku } = req.params;
     const { days = 7 } = req.query;
 
@@ -1255,9 +1298,9 @@ app.get('/api/component-sales/:sku', async (req, res) => {
       componentSku: sku,
       orderDate: { $gte: daysAgo }
     })
-    .sort({ orderDate: -1 })
-    .limit(100)
-    .toArray();
+      .sort({ orderDate: -1 })
+      .limit(100)
+      .toArray();
 
     const summary = await componentSales.aggregate([
       {
@@ -1286,10 +1329,12 @@ app.get('/api/component-sales/:sku', async (req, res) => {
           directSales: {
             $sum: {
               $cond: [
-                { $and: [
-                  { $eq: ['$action', 'sale'] },
-                  { $eq: ['$saleType', 'direct'] }
-                ]},
+                {
+                  $and: [
+                    { $eq: ['$action', 'sale'] },
+                    { $eq: ['$saleType', 'direct'] }
+                  ]
+                },
                 '$quantitySold',
                 0
               ]
@@ -1298,10 +1343,12 @@ app.get('/api/component-sales/:sku', async (req, res) => {
           bundleSales: {
             $sum: {
               $cond: [
-                { $and: [
-                  { $eq: ['$action', 'sale'] },
-                  { $eq: ['$saleType', 'bundle'] }
-                ]},
+                {
+                  $and: [
+                    { $eq: ['$action', 'sale'] },
+                    { $eq: ['$saleType', 'bundle'] }
+                  ]
+                },
                 '$quantitySold',
                 0
               ]
@@ -1315,15 +1362,15 @@ app.get('/api/component-sales/:sku', async (req, res) => {
       }
     ]).toArray();
 
-    const stats = summary[0] || { 
-      totalSold: 0, 
+    const stats = summary[0] || {
+      totalSold: 0,
       totalRefunded: 0,
       directSales: 0,
       bundleSales: 0,
       totalRevenue: 0,
       totalCost: 0,
       totalProfit: 0,
-      orderCount: [] 
+      orderCount: []
     };
 
     res.json({
@@ -1334,7 +1381,7 @@ app.get('/api/component-sales/:sku', async (req, res) => {
       pricing: {
         unitPrice: stats.unitPrice,
         unitCost: stats.unitCost,
-        profitPerUnit: stats.unitPrice && stats.unitCost 
+        profitPerUnit: stats.unitPrice && stats.unitCost
           ? Math.round((stats.unitPrice - stats.unitCost) * 100) / 100
           : 0
       },
@@ -1364,7 +1411,7 @@ app.get('/api/bundle-sales/:sku', async (req, res) => {
   try {
     const db = await connectDB();
     const bundleSales = db.collection('bundleSales');
-    
+
     const { sku } = req.params;
     const { days = 7 } = req.query;
 
@@ -1375,9 +1422,9 @@ app.get('/api/bundle-sales/:sku', async (req, res) => {
       bundleSku: sku,
       orderDate: { $gte: daysAgo }
     })
-    .sort({ orderDate: -1 })
-    .limit(100)
-    .toArray();
+      .sort({ orderDate: -1 })
+      .limit(100)
+      .toArray();
 
     const summary = await bundleSales.aggregate([
       {
@@ -1412,8 +1459,8 @@ app.get('/api/bundle-sales/:sku', async (req, res) => {
       }
     ]).toArray();
 
-    const stats = summary[0] || { 
-      totalSold: 0, 
+    const stats = summary[0] || {
+      totalSold: 0,
       totalRefunded: 0,
       totalRevenue: 0,
       orderCount: [],
@@ -1448,7 +1495,7 @@ app.get('/api/component-sales/daily', async (req, res) => {
   try {
     const db = await connectDB();
     const dailySummary = db.collection('dailyComponentSummary');
-    
+
     const { days = 7, sku } = req.query;
 
     const daysAgo = new Date();
@@ -1482,7 +1529,7 @@ app.get('/api/bundle-sales/daily', async (req, res) => {
   try {
     const db = await connectDB();
     const dailySummary = db.collection('dailyBundleSummary');
-    
+
     const { days = 7, sku } = req.query;
 
     const daysAgo = new Date();
@@ -1517,8 +1564,8 @@ app.get('/api/bundle-sales/daily', async (req, res) => {
 
 app.get('/health', async (req, res) => {
   const dbConnected = db !== null;
-  res.status(200).json({ 
-    status: 'OK', 
+  res.status(200).json({
+    status: 'OK',
     timestamp: new Date().toISOString(),
     mongoConnected: dbConnected
   });
@@ -1533,16 +1580,118 @@ app.get('/test/variant/:sku', async (req, res) => {
   }
 });
 
+// ============================================
+// FULFILLMENT WEBHOOK
+// ============================================
+
+app.post('/webhooks/fulfillments/create', verifyWebhook, async (req, res) => {
+  console.log('\n📦 Fulfillment created webhook received');
+  
+  res.status(200).send('OK');
+  
+  try {
+    const fulfillment = req.body;
+    const orderId = fulfillment.order_id?.toString();
+    
+    if (!orderId) {
+      console.log('⚠️  No order ID in fulfillment webhook');
+      return;
+    }
+
+    console.log(`Processing fulfillment for order #${orderId}`);
+    
+    const db = await connectDB();
+    const componentSales = db.collection('componentSales');
+    const bundleSales = db.collection('bundleSales');
+    
+    // Get all line items from this fulfillment
+    const lineItems = fulfillment.line_items || [];
+    
+    for (const item of lineItems) {
+      const sku = item.sku;
+      
+      if (!sku) continue;
+      
+      // Only update fruit products
+      if (!sku.includes('GND-FRT')) {
+        console.log(`   ℹ️  Skipping non-fruit item: ${sku}`);
+        continue;
+      }
+      
+      const quantity = item.quantity;
+      
+      console.log(`   📦 Marking ${quantity}x ${sku} as fulfilled in order ${orderId}`);
+      
+      // Update component sales
+      const componentResult = await componentSales.updateMany(
+        {
+          orderId: orderId,
+          componentSku: sku,
+          isFulfilled: false // Only update unfulfilled items
+        },
+        {
+          $set: {
+            isFulfilled: true,
+            fulfillmentStatus: 'fulfilled',
+            fulfilledAt: new Date(),
+            updatedAt: new Date()
+          }
+        }
+      );
+      
+      console.log(`   ✅ Updated ${componentResult.modifiedCount} component sale records`);
+      
+      // Update bundle sales if this is a bundle
+      const bundleResult = await bundleSales.updateMany(
+        {
+          orderId: orderId,
+          bundleSku: sku,
+          isFulfilled: false
+        },
+        {
+          $set: {
+            isFulfilled: true,
+            fulfillmentStatus: 'fulfilled',
+            fulfilledAt: new Date(),
+            updatedAt: new Date()
+          }
+        }
+      );
+      
+      if (bundleResult.modifiedCount > 0) {
+        console.log(`   ✅ Updated ${bundleResult.modifiedCount} bundle sale records`);
+      }
+      
+      // Rebuild daily summaries for the order date
+      // Find the order date from one of the sales records
+      const sampleSale = await componentSales.findOne({
+        orderId: orderId,
+        componentSku: sku
+      });
+      
+      if (sampleSale) {
+        await updateDailyComponentSummary(sku, sampleSale.orderDate);
+        console.log(`   📊 Updated daily summary for ${sku}`);
+      }
+    }
+    
+    console.log('✅ Fulfillment processing complete');
+    
+  } catch (error) {
+    console.error('❌ Error processing fulfillment:', error);
+  }
+});
+
 app.post('/test/process-order', express.json(), async (req, res) => {
   const { lineItems, action } = req.body;
-  
+
   try {
     const mockOrder = {
       id: 'test-' + Date.now(),
       name: '#TEST' + Math.floor(Math.random() * 1000),
       created_at: new Date().toISOString()
     };
-    
+
     const results = await processLineItems(lineItems, action || 'reduce', mockOrder);
     res.json({ success: true, results });
   } catch (error) {
