@@ -391,7 +391,8 @@ const BUNDLE_PRICING = {
   'MG-RVOA-FS-08J-DTC-2PK': { price: 24.00, cost: 5.37, name: '2-Pack Ruby Valencia & Apricot Fruit Spread' },
   'MG-CCH-MM-08J-DTC-2PK': { price: 24.00, cost: 5.32, name: '2-Pack Cara Cara & Hibiscus Marmalade' },
   'MG-MLH-MM-08J-DTC-2PK': { price: 24.00, cost: 5.64, name: '2-Pack Meyer Lemon & Honey Marmalade' },
-  'MG-MIX-05J-DTC-6PK': { price: 60.00, cost: 11.79, name: '"Party Of Six" Gift Set' },
+  'MG-MIX-05J-DTC-6PK': { price: 70.00, cost: 11.79, name: '"Party Of Six" Gift Set' },
+  '42720028917813': { price: 60.00, cost: 11.79, name: '"Amazon - Party Of Six" Gift Set' },
   'MG-GND-FRT-05LB': {
     price: 65.00,
     cost: 10.03,
@@ -455,6 +456,14 @@ const BUNDLE_CONFIG = {
   'MG-CCH-MM-08J-DTC-2PK': [{ sku: 'MG-CCH-MM-08J', quantity: 2 }],
   'MG-MLH-MM-08J-DTC-2PK': [{ sku: 'MG-MLH-MM-08J', quantity: 2 }],
   'MG-MIX-05J-DTC-6PK': [
+    { sku: 'MG-PX-MM-05J', quantity: 1 },
+    { sku: 'MG-MLH-MM-05J', quantity: 1 },
+    { sku: 'MG-CCH-MM-05J', quantity: 1 },
+    { sku: 'MG-RVOA-FS-05J', quantity: 1 },
+    { sku: 'MG-OBA-FS-05J', quantity: 1 },
+    { sku: 'MG-NCT-MM-05J', quantity: 1 },
+  ],
+  '42720028917813': [
     { sku: 'MG-PX-MM-05J', quantity: 1 },
     { sku: 'MG-MLH-MM-05J', quantity: 1 },
     { sku: 'MG-CCH-MM-05J', quantity: 1 },
