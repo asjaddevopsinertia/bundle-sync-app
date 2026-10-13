@@ -395,6 +395,8 @@ const BUNDLE_PRICING = {
   'MG-MLH-MM-08J-DTC-2PK': { price: 24.00, cost: 5.64, name: '2-Pack Meyer Lemon & Honey Marmalade' },
   'MG-MIX-05J-DTC-6PK': { price: 70.00, cost: 11.79, name: '"Party Of Six" Gift Set' },
   '42720028917813': { price: 60.00, cost: 11.79, name: '"Amazon - Party Of Six" Gift Set' },
+  'MG-ENDSUM-08J-DTC-3PK': { price: 36.00, cost: 7.90, name: 'Endless Summer Gift Set' },
+  'MG-GLDHR-08J-DTC-3PK': { price: 36.00, cost: 8.40, name: 'Golden Hour Gift Set' },
   'MG-GND-FRT-05LB': {
     price: 65.00,
     cost: 10.03,
@@ -479,6 +481,16 @@ const BUNDLE_CONFIG = {
   'MG-GND-FRT-10LB': [
     { sku: 'MG-GND-FRT-01LB', quantity: 10 },
   ],
+  'MG-ENDSUM-08J-DTC-3PK': [
+    { sku: 'MG-MLH-MM-08J', quantity: 1 },
+    { sku: 'MG-CCH-MM-08J', quantity: 1 },
+    { sku: 'MG-PX-MM-08J', quantity: 1 }
+  ],
+  'MG-GLDHR-08J-DTC-3PK': [
+    { sku: 'MG-SML-FS-08J', quantity: 1 },
+    { sku: 'MG-RTT-FS-08J', quantity: 1 },
+    { sku: 'MG-RVOA-FS-08J', quantity: 1 }
+  ]
 };
 
 function getAccessToken() {
