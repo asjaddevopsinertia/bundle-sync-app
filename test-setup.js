@@ -1,14 +1,15 @@
 require('dotenv').config();
 const axios = require('axios');
+const { getAccessToken } = require('./shopify-auth');
 
 const SHOPIFY_CONFIG = {
   shop: process.env.SHOPIFY_SHOP_DOMAIN,
-  accessToken: process.env.SHOPIFY_ACCESS_TOKEN,
 };
 
 console.log("shopify config:", {
   shop: SHOPIFY_CONFIG.shop,
-  hasToken: !!SHOPIFY_CONFIG.accessToken
+  hasClientId: !!process.env.SHOPIFY_CLIENT_ID,
+  hasClientSecret: !!process.env.SHOPIFY_CLIENT_SECRET
 });
 
 const BUNDLE_CONFIG = {
@@ -22,10 +23,6 @@ const BUNDLE_CONFIG = {
     { sku: '456', quantity: 1 }
   ]
 };
-
-async function getAccessToken() {
-  return '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'
-}
 
 async function shopifyGraphQL(query, variables = {}) {
   const accessToken = await getAccessToken();

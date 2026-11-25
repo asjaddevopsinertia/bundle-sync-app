@@ -3,6 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const crypto = require('crypto');
 const axios = require('axios');
+const { getAccessToken } = require('./shopify-auth');
 const { MongoClient, ObjectId } = require('mongodb');
 
 const app = express();
@@ -447,7 +448,6 @@ function isTrackableIndividual(sku) {
 
 const SHOPIFY_CONFIG = {
   shop: process.env.SHOPIFY_SHOP_DOMAIN,
-  accessToken: process.env.SHOPIFY_ACCESS_TOKEN,
   apiVersion: '2024-01',
   webhookSecret: process.env.SHOPIFY_WEBHOOK_SECRET
 };
@@ -493,15 +493,8 @@ const BUNDLE_CONFIG = {
   ]
 };
 
-function getAccessToken() {
-  if (!SHOPIFY_CONFIG.accessToken) {
-    throw new Error('SHOPIFY_ACCESS_TOKEN is not set in environment variables');
-  }
-  return SHOPIFY_CONFIG.accessToken;
-}
-
 async function shopifyGraphQL(query, variables = {}) {
-  const accessToken = getAccessToken();
+  const accessToken = await getAccessToken();
 
   try {
     const response = await axios.post(
@@ -704,7 +697,7 @@ async function adjustInventory(sku, quantityDelta, reason = 'other') {
     const inventoryItemId = variant.inventoryItem.id.split('/').pop();
     const locationId = inventoryLevel.location.id.split('/').pop();
 
-    const accessToken = getAccessToken();
+    const accessToken = await getAccessToken();
 
     const response = await axios.post(
       `https://${SHOPIFY_CONFIG.shop}/admin/api/${SHOPIFY_CONFIG.apiVersion}/inventory_levels/set.json`,

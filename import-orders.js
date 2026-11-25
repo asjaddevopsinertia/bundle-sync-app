@@ -3,6 +3,7 @@ require('dotenv').config();
 process.env.TZ = 'America/Los_Angeles';
 const { MongoClient } = require('mongodb');
 const axios = require('axios');
+const { getAccessToken } = require('./shopify-auth');
 
 // ============================================
 // CONFIGURATION
@@ -10,7 +11,6 @@ const axios = require('axios');
 
 const SHOPIFY_CONFIG = {
   shop: process.env.SHOPIFY_SHOP_DOMAIN,
-  accessToken: process.env.SHOPIFY_ACCESS_TOKEN,
   apiVersion: '2024-01'
 };
 
@@ -141,7 +141,7 @@ async function shopifyRestAPI(endpoint, params = {}) {
     const url = `https://${SHOPIFY_CONFIG.shop}/admin/api/${SHOPIFY_CONFIG.apiVersion}/${endpoint}`;
     const response = await axios.get(url, {
       headers: {
-        'X-Shopify-Access-Token': SHOPIFY_CONFIG.accessToken,
+        'X-Shopify-Access-Token': await getAccessToken(),
         'Content-Type': 'application/json'
       },
       params
@@ -178,7 +178,7 @@ async function fetchAllOrders(startDate, endDate) {
       const url = `https://${SHOPIFY_CONFIG.shop}/admin/api/${SHOPIFY_CONFIG.apiVersion}/orders.json`;
       const response = await axios.get(url, {
         headers: {
-          'X-Shopify-Access-Token': SHOPIFY_CONFIG.accessToken
+          'X-Shopify-Access-Token': await getAccessToken()
         },
         params
       });
